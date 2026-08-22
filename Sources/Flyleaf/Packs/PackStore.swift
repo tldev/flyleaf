@@ -54,6 +54,14 @@ final class PackStore: @unchecked Sendable {
             asin TEXT PRIMARY KEY,
             max_position INTEGER NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS imported_chapters (
+            asin TEXT NOT NULL,
+            idx INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            text TEXT NOT NULL,
+            start_percent REAL NOT NULL,
+            PRIMARY KEY (asin, idx)
+        );
         """)
     }
 
@@ -195,5 +203,31 @@ final class PackStore: @unchecked Sendable {
             "INSERT OR REPLACE INTO doc_meta (asin, max_position) VALUES (?,?)",
             [.text(asin), .int(Int64(position))]
         )
+    }
+
+    // MARK: Imported book text (local EPUB)
+
+    func saveImportedChapters(asin: String, chapters: [ImportedChapter]) {
+        try? db.run("DELETE FROM imported_chapters WHERE asin=?", [.text(asin)])
+        for chapter in chapters {
+            try? db.run(
+                "INSERT OR REPLACE INTO imported_chapters (asin, idx, title, text, start_percent) VALUES (?,?,?,?,?)",
+                [.text(asin), .int(Int64(chapter.index)), .text(chapter.title), .text(chapter.text), .real(chapter.startPercent)]
+            )
+        }
+    }
+
+    func hasImportedText(asin: String) -> Bool {
+        guard let rows = try? db.query("SELECT COUNT(*) AS c FROM imported_chapters WHERE asin=?", [.text(asin)]) else { return false }
+        return (rows.first?["c"]?.intValue ?? 0) > 0
+    }
+
+    func importedChapterText(asin: String, index: Int) -> String? {
+        guard let rows = try? db.query("SELECT text FROM imported_chapters WHERE asin=? AND idx=?", [.text(asin), .int(Int64(index))]) else { return nil }
+        return rows.first?["text"]?.stringValue
+    }
+
+    func clearImportedText(asin: String) {
+        try? db.run("DELETE FROM imported_chapters WHERE asin=?", [.text(asin)])
     }
 }

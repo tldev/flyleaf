@@ -663,6 +663,16 @@ final class AppState {
             }
             return
         }
+
+        // When the book's real text is imported locally, extract entities from
+        // the actual chapter text with the cheap model instead of researching
+        // it from the web.
+        if Prefs.shared.preferLocalText, store.hasImportedText(asin: book.asin),
+           let text = store.importedChapterText(asin: book.asin, index: chapter) {
+            buildLocalPack(book: book, chapter: chapter, text: text, display: display)
+            return
+        }
+
         guard builderAvailable else {
             if display { packStatus = .needsKey }
             return
@@ -720,6 +730,106 @@ final class AppState {
                 }
             }
         }
+    }
+
+    // MARK: Local text path (imported EPUB + cheap extraction model)
+
+    private func buildLocalPack(book: BookRef, chapter: Int, text: String, display: Bool) {
+        guard let toc else { return }
+        let key = "\(book.asin):\(chapter)"
+        guard !buildingKeys.contains(key) else { return }
+        buildingKeys.insert(key)
+        if display { packStatus = .building("Reading the chapter") }
+        let chapterTitle = toc.chapter(chapter)?.title ?? "Chapter \(chapter)"
+        let previousNames = store.packs(asin: book.asin, throughChapter: max(chapter - 1, 0))
+            .flatMap { $0.entities.map(\.name) }
+        let uniqueNames = Array(Set(previousNames)).sorted().prefix(50).map { String($0) }
+
+        Task {
+            defer { buildingKeys.remove(key) }
+            guard let client = await OpenRouterClient.fromKeychain() else {
+                if display && currentChapter == chapter {
+                    packStatus = .failed("Add your OpenRouter API key in Settings, Pack Builder to read imported books.")
+                }
+                return
+            }
+            do {
+                let builder = LocalPackBuilder(client: client)
+                let raw = try await builder.buildPack(
+                    book: book, chapter: chapter, chapterTitle: chapterTitle,
+                    chapterText: text, previousEntityNames: Array(uniqueNames)
+                )
+                if display && currentChapter == chapter { packStatus = .building("Finding imagery") }
+                let enriched = await wiki.enrich(raw)
+                store.savePack(enriched)
+                if currentChapter == chapter && currentBook?.asin == book.asin {
+                    activePack = enriched
+                    packStatus = .ready
+                    notifyChapterIfNeeded(pack: enriched)
+                }
+            } catch {
+                log(.packs, .error, "Local pack build failed for ch\(chapter): \(error)")
+                if display && currentChapter == chapter { packStatus = .failed("\(error)") }
+            }
+        }
+    }
+
+    // Imports a local EPUB the user already has and attaches its real chapters
+    // and text to the current book (or opens it as a new book). Nothing leaves
+    // the Mac except, later, one chapter of text at a time to the extractor.
+    func importEPUB(url: URL) {
+        packStatus = .building("Reading the file")
+        Task {
+            do {
+                let imported = try await Task.detached { try EPUBParser.parse(fileURL: url) }.value
+                attachImport(imported, sourceName: url.deletingPathExtension().lastPathComponent)
+            } catch {
+                statusMessage = "Import failed: \(error)"
+                packStatus = .failed("Could not read that EPUB: \(error)")
+                log(.packs, .error, "EPUB import failed: \(error)")
+            }
+        }
+    }
+
+    private func attachImport(_ imported: ImportedBook, sourceName: String) {
+        guard !imported.chapters.isEmpty else {
+            packStatus = .failed("That EPUB had no readable chapters.")
+            return
+        }
+        let target: BookRef
+        if let current = currentBook {
+            target = current
+        } else {
+            let slug = imported.title.lowercased()
+                .replacingOccurrences(of: "[^a-z0-9]+", with: "-", options: .regularExpression)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+            target = BookRef(asin: "epub:\(slug)", title: imported.title, authors: imported.authors, coverURL: nil, isManual: true)
+            currentBook = target
+            Prefs.shared.currentASIN = target.asin
+            position = ReadingPosition(percent: 0, syncedAt: Date(), deviceName: "Imported", kindlePosition: nil)
+        }
+        store.saveImportedChapters(asin: target.asin, chapters: imported.chapters)
+        store.saveTOC(imported.toc, asin: target.asin)
+        store.saveBook(target)
+        toc = imported.toc
+        activePack = nil
+        packStatus = .none
+        currentChapter = nil
+        log(.app, "Imported \(imported.chapters.count) chapters of '\(imported.title)' onto \(target.title)")
+        recomputeChapter()
+        if currentChapter == nil { setManualChapter(1) }
+        else if let chapter = currentChapter { ensurePack(chapter: chapter, display: true) }
+    }
+
+    var hasLocalText: Bool {
+        guard let book = currentBook else { return false }
+        return store.hasImportedText(asin: book.asin)
+    }
+
+    func removeLocalText() {
+        guard let book = currentBook else { return }
+        store.clearImportedText(asin: book.asin)
+        log(.app, "Removed imported text for \(book.title)")
     }
 
     private func prefetchNext(after chapter: Int) {

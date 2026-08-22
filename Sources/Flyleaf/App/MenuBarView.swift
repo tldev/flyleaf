@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct MenuBarView: View {
     @Environment(AppState.self) private var state
@@ -145,6 +146,9 @@ struct MenuBarView: View {
             MenuRow(symbol: "arrow.left.arrow.right", title: "Switch book…") {
                 WindowManager.shared.showManualPicker()
             }
+            MenuRow(symbol: "square.and.arrow.down", title: "Import EPUB…") {
+                importEPUB()
+            }
             MenuRow(symbol: "gearshape", title: "Settings…") {
                 WindowManager.shared.showSettings()
             }
@@ -205,6 +209,19 @@ struct MenuBarView: View {
             Text("Flyleaf follows your Kindle as you read.")
                 .font(.system(size: 10.5))
                 .foregroundStyle(.tertiary)
+        }
+    }
+}
+
+extension MenuBarView {
+    func importEPUB() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.epub]
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Import"
+        if panel.runModal() == .OK, let url = panel.url {
+            state.importEPUB(url: url)
+            WindowManager.shared.showMain()
         }
     }
 }

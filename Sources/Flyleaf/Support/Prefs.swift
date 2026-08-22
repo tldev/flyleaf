@@ -92,6 +92,8 @@ final class Prefs {
     var currentASIN: String? { didSet { d.set(currentASIN, forKey: "currentASIN") } }
     var personalDocSync: Bool { didSet { d.set(personalDocSync, forKey: "personalDocSync") } }
     var packModel: String { didSet { d.set(packModel, forKey: "packModel") } }
+    var extractModel: String { didSet { d.set(extractModel, forKey: "extractModel") } }
+    var preferLocalText: Bool { didSet { d.set(preferLocalText, forKey: "preferLocalText") } }
     var capturedUserAgent: String? { didSet { d.set(capturedUserAgent, forKey: "capturedUserAgent") } }
 
     private init() {
@@ -117,6 +119,8 @@ final class Prefs {
         currentASIN = d.string(forKey: "currentASIN")
         personalDocSync = d.object(forKey: "personalDocSync") as? Bool ?? false
         packModel = d.string(forKey: "packModel") ?? "claude-opus-5"
+        extractModel = d.string(forKey: "extractModel") ?? "google/gemini-3.7-flash"
+        preferLocalText = d.object(forKey: "preferLocalText") as? Bool ?? true
         capturedUserAgent = d.string(forKey: "capturedUserAgent")
     }
 }

@@ -77,4 +77,5 @@ enum Keychain {
 
 enum SecretAccount {
     static let anthropicKey = "anthropic-api-key"
+    static let openRouterKey = "openrouter-api-key"
 }

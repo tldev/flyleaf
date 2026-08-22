@@ -139,6 +139,12 @@ enum URLCommands {
             Task { await state.probeDeviceRegistration(term: term) }
         case "docsync":
             Task { await state.enablePersonalDocSync() }
+        case "import":
+            let comps = URLComponents(url: url, resolvingAgainstBaseURL: false)
+            if let path = comps?.queryItems?.first(where: { $0.name == "path" })?.value {
+                state.importEPUB(url: URL(fileURLWithPath: path))
+                WindowManager.shared.showMain()
+            }
         case "session":
             // "Start reading session" for Shortcuts and Focus automations.
             Prefs.shared.paused = false

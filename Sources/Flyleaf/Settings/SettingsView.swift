@@ -1,5 +1,6 @@
 import SwiftUI
 import ServiceManagement
+import UniformTypeIdentifiers
 
 struct SettingsView: View {
     @Environment(AppState.self) private var state
@@ -95,6 +96,8 @@ private struct PackSettings: View {
     @State private var keyInput = ""
     @State private var hasKey = Keychain.get(account: SecretAccount.anthropicKey) != nil
     @State private var cleared = false
+    @State private var orKeyInput = ""
+    @State private var hasORKey = Keychain.get(account: SecretAccount.openRouterKey) != nil
 
     var body: some View {
         @Bindable var prefs = Prefs.shared
@@ -159,6 +162,45 @@ private struct PackSettings: View {
                 Toggle("Prefetch the next chapter's pack", isOn: $prefs.prefetchNext)
             }
 
+            Section("Local book text (from an imported EPUB)") {
+                Text("When you import an EPUB, Flyleaf reads the real chapter text with a cheap model on OpenRouter to find who, where, and what each chapter is about. Only the current chapter is ever sent, so it stays spoiler-safe.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if hasORKey {
+                    LabeledContent("OpenRouter") {
+                        Label("Key saved", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                    }
+                    Button("Remove OpenRouter key") {
+                        Keychain.delete(account: SecretAccount.openRouterKey)
+                        hasORKey = false
+                    }
+                } else {
+                    HStack {
+                        SecureField("OpenRouter key (sk-or-…)", text: $orKeyInput)
+                        Button("Save") {
+                            let trimmed = orKeyInput.trimmingCharacters(in: .whitespacesAndNewlines)
+                            guard !trimmed.isEmpty else { return }
+                            Keychain.set(trimmed, account: SecretAccount.openRouterKey)
+                            orKeyInput = ""
+                            hasORKey = true
+                        }
+                        .disabled(orKeyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                    Link("Get a key at openrouter.ai/keys", destination: URL(string: "https://openrouter.ai/keys")!)
+                        .font(.caption)
+                }
+                TextField("Extraction model", text: $prefs.extractModel)
+                Text("Default google/gemini-3.7-flash. Any OpenRouter model slug works.")
+                    .font(.caption2).foregroundStyle(.tertiary)
+                Toggle("Use imported text when available", isOn: $prefs.preferLocalText)
+                Button("Import an EPUB…") { importEPUB() }
+                if state.hasLocalText {
+                    Button("Remove imported text for this book", role: .destructive) {
+                        state.removeLocalText()
+                    }
+                }
+            }
+
             Section("Cache") {
                 Button("Rebuild current chapter") {
                     if let chapter = state.currentChapter, let book = state.currentBook {
@@ -177,6 +219,18 @@ private struct PackSettings: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    private func importEPUB() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.epub]
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Import"
+        panel.message = "Choose the EPUB for the book you're reading"
+        if panel.runModal() == .OK, let url = panel.url {
+            state.importEPUB(url: url)
+            WindowManager.shared.showMain()
+        }
     }
 }
 
