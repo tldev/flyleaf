@@ -33,6 +33,11 @@ final class WindowManager: NSObject, NSWindowDelegate {
         window.title = title
         window.titlebarAppearsTransparent = true
         window.isReleasedWhenClosed = false
+        if id == "main" {
+            window.titleVisibility = .hidden          // the warm bar carries the title
+            window.isRestorable = false               // always open at the top
+            window.backgroundColor = NSColor(red: 0.957, green: 0.945, blue: 0.918, alpha: 1)
+        }
         window.contentViewController = NSHostingController(rootView: AnyView(content()))
         // Assigning contentViewController shrinks the window to the hosting
         // view's fitting size, which for flexible SwiftUI content is tiny.
@@ -82,7 +87,7 @@ final class WindowManager: NSObject, NSWindowDelegate {
     func showMain(tab: MainTab? = nil) {
         guard let state else { return }
         if let tab { state.mainTab = tab }
-        present(id: "main", title: "Flyleaf", size: NSSize(width: 1080, height: 720), resizable: true) {
+        present(id: "main", title: "Flyleaf", size: NSSize(width: 1240, height: 880), resizable: true) {
             MainWindowView().environment(state)
         }
     }
