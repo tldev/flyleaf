@@ -140,6 +140,8 @@ struct PlaceMapTile: View {
     let place: Entity
     let allPlaces: [Entity]
 
+    private let mainSpanDelta: CLLocationDegrees = 2.6
+
     private var center: CLLocationCoordinate2D {
         CLLocationCoordinate2D(latitude: place.latitude ?? 0, longitude: place.longitude ?? 0)
     }
@@ -148,11 +150,25 @@ struct PlaceMapTile: View {
         return withCoords.isEmpty ? [place] : withCoords
     }
 
+    // The four corners of the main map's viewport, drawn as a rectangle on the
+    // inset so it shows where the big map sits in the wider region.
+    private var mainViewportCorners: [CLLocationCoordinate2D] {
+        let half = mainSpanDelta / 2
+        let n = center.latitude + half, s = center.latitude - half
+        let e = center.longitude + half, w = center.longitude - half
+        return [
+            CLLocationCoordinate2D(latitude: n, longitude: w),
+            CLLocationCoordinate2D(latitude: n, longitude: e),
+            CLLocationCoordinate2D(latitude: s, longitude: e),
+            CLLocationCoordinate2D(latitude: s, longitude: w),
+        ]
+    }
+
     var body: some View {
         ZStack {
             Map(initialPosition: .region(MKCoordinateRegion(
                 center: center,
-                span: MKCoordinateSpan(latitudeDelta: 2.6, longitudeDelta: 2.6)
+                span: MKCoordinateSpan(latitudeDelta: mainSpanDelta, longitudeDelta: mainSpanDelta)
             ))) {
                 ForEach(markers) { p in
                     Annotation(p.name, coordinate: CLLocationCoordinate2D(latitude: p.latitude ?? 0, longitude: p.longitude ?? 0)) {
@@ -183,7 +199,9 @@ struct PlaceMapTile: View {
             center: CLLocationCoordinate2D(latitude: (place.latitude ?? 0) + 5, longitude: (place.longitude ?? 0) - 4),
             span: MKCoordinateSpan(latitudeDelta: 30, longitudeDelta: 30)
         ))) {
-            Marker("", coordinate: center).tint(Gallery.accent)
+            MapPolygon(coordinates: mainViewportCorners)
+                .foregroundStyle(Gallery.accent.opacity(0.14))
+                .stroke(Gallery.accent, lineWidth: 2)
         }
         .mapStyle(.standard(elevation: .flat, pointsOfInterest: .excludingAll))
         .mapControlVisibility(.hidden)
