@@ -323,6 +323,7 @@ final class AppState {
     }
 
     private func applyDocPosition(_ pos: KindleClient.DocPosition, for book: BookRef) {
+        let previousRaw = position?.kindlePosition
         var maxPos = store.docMaxPosition(asin: book.asin) ?? 0
         if maxPos == 0 {
             // No scale yet: assume the reader is roughly mid-book so the first
@@ -336,13 +337,25 @@ final class AppState {
             store.setDocMaxPosition(asin: book.asin, position: maxPos)
         }
         let percent = maxPos > 0 ? min(99.5, Double(pos.position) / Double(maxPos) * 100) : 0
-        let previous = position?.percent
+        // Detect movement by the raw Kindle position, not the percent, since a
+        // large scale can hide small reading advances as a percent that barely
+        // moves.
+        let advanced = previousRaw == nil || pos.position != previousRaw
         position = ReadingPosition(percent: percent, syncedAt: Date(), deviceName: "Kindle", kindlePosition: pos.position)
-        store.recordPosition(PositionSample(asin: book.asin, percent: percent, at: pos.lastRead ?? Date(), source: "whispersync-pdoc"))
-        if previous == nil || percent > (previous ?? -1) + 0.01 {
-            lastAdvanceAt = Date()
+        if advanced {
+            // Timestamp the sample at observation time; the sidecar's own
+            // creationTime is not a reliable last-read time.
+            store.recordPosition(PositionSample(asin: book.asin, percent: percent, at: Date(), source: "whispersync-pdoc"))
+            if pos.position > (previousRaw ?? -1) {
+                lastAdvanceAt = Date()
+                currentActivityAt = Date()
+            }
+            if let previousRaw {
+                log(.poller, "Doc '\(book.title)': position \(previousRaw) -> \(pos.position) (\(String(format: "%.1f", percent))%)")
+            } else {
+                log(.poller, "Doc '\(book.title)': position \(pos.position) (\(String(format: "%.1f", percent))%)")
+            }
         }
-        currentActivityAt = pos.lastRead ?? currentActivityAt
         recomputeChapter()
         updateStats()
     }
@@ -372,12 +385,20 @@ final class AppState {
 
         // A personal document being followed: read its Whispersync position.
         if let book = currentBook, book.isPersonalDoc {
-            if kindle.deviceSigner != nil, let pos = await kindle.personalDocPosition(asin: book.asin) {
+            if kindle.deviceSigner == nil {
+                log(.poller, .warn, "Personal doc \(book.title): device signer missing; re-loading")
+                loadDeviceSigner()
+            }
+            if let pos = await kindle.personalDocPosition(asin: book.asin) {
+                log(.poller, .debug, "Polled '\(book.title)' furthest-read position: \(pos.position)")
                 applyDocPosition(pos, for: book)
                 lastPollAt = Date()
+                statusMessage = nil
+            } else {
+                log(.poller, .warn, "Personal doc \(book.title): no position returned this poll")
             }
             pollTick += 1
-            if pollTick % 12 == 0 { await refreshActivePersonalDoc(force: false) }
+            if pollTick % 10 == 0 { await refreshActivePersonalDoc(force: false) }
             return
         }
         guard currentBook?.isManual != true else { return }
