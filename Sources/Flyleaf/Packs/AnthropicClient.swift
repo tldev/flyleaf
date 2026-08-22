@@ -56,10 +56,14 @@ final class AnthropicClient: @unchecked Sendable {
         session = URLSession(configuration: config)
     }
 
-    // Claude account (CLI profile) wins over a pasted key when both exist.
+    // Auth priority: the user's Claude subscription (via the Claude Code
+    // login) first, then a CLI OAuth profile, then a pasted API key.
     @MainActor
     static func resolve() async -> AnthropicClient? {
         let model = Prefs.shared.packModel
+        if let token = await Task.detached(operation: { ClaudeCodeAuth.accessToken() }).value {
+            return AnthropicClient(auth: .oauth(token), model: model)
+        }
         if let token = await Task.detached(operation: { AntCLI.mintAccessToken() }).value {
             return AnthropicClient(auth: .oauth(token), model: model)
         }

@@ -133,6 +133,12 @@ enum URLCommands {
             } else {
                 log(.kindle, .warn, "DIAG requested but Amazon is not connected")
             }
+        case "register":
+            let comps = URLComponents(url: url, resolvingAgainstBaseURL: false)
+            let term = comps?.queryItems?.first(where: { $0.name == "q" })?.value ?? "apple"
+            Task { await state.probeDeviceRegistration(term: term) }
+        case "docsync":
+            Task { await state.enablePersonalDocSync() }
         case "session":
             // "Start reading session" for Shortcuts and Focus automations.
             Prefs.shared.paused = false

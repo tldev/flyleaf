@@ -50,6 +50,10 @@ final class PackStore: @unchecked Sendable {
             json TEXT NOT NULL,
             last_seen REAL NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS doc_meta (
+            asin TEXT PRIMARY KEY,
+            max_position INTEGER NOT NULL
+        );
         """)
     }
 
@@ -177,5 +181,19 @@ final class PackStore: @unchecked Sendable {
             guard let json = row["json"]?.stringValue, let data = json.data(using: .utf8) else { return nil }
             return try? decoder.decode(BookRef.self, from: data)
         }
+    }
+
+    // MARK: Personal-document position scale
+
+    func docMaxPosition(asin: String) -> Int? {
+        guard let rows = try? db.query("SELECT max_position FROM doc_meta WHERE asin=?", [.text(asin)]) else { return nil }
+        return rows.first?["max_position"]?.intValue.map(Int.init)
+    }
+
+    func setDocMaxPosition(asin: String, position: Int) {
+        try? db.run(
+            "INSERT OR REPLACE INTO doc_meta (asin, max_position) VALUES (?,?)",
+            [.text(asin), .int(Int64(position))]
+        )
     }
 }

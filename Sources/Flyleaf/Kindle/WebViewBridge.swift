@@ -59,6 +59,33 @@ final class WebViewBridge: NSObject {
         }
     }
 
+    func post(_ url: URL, headers: [String: String], body: String) async throws -> (status: Int, body: Data) {
+        let wv = try await preparedWebView(for: URL(string: "https://\(url.host ?? "www.amazon.com")")!)
+        let js = """
+        const res = await fetch(target, { method: "POST", credentials: "include", headers: hdrs, body: payload });
+        const text = await res.text();
+        return { status: res.status, body: text };
+        """
+        do {
+            let result = try await wv.callAsyncJavaScript(
+                js,
+                arguments: ["target": url.absoluteString, "hdrs": headers, "payload": body],
+                in: nil,
+                contentWorld: .defaultClient
+            )
+            guard let dict = result as? [String: Any],
+                  let status = dict["status"] as? Int,
+                  let text = dict["body"] as? String else {
+                throw KindleError.transport("WebView bridge POST returned unexpected shape")
+            }
+            return (status, Data(text.utf8))
+        } catch let error as KindleError {
+            throw error
+        } catch {
+            throw KindleError.transport("WebView bridge POST: \(error.localizedDescription)")
+        }
+    }
+
     func reset() {
         webView = nil
         readyHost = nil

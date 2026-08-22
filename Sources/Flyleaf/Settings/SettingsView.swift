@@ -100,28 +100,23 @@ private struct PackSettings: View {
         @Bindable var prefs = Prefs.shared
         Form {
             Section("Claude account (recommended)") {
-                if state.builderAuth == .claudeAccount {
+                switch state.builderAuth {
+                case .subscription(let plan):
                     LabeledContent("Status") {
-                        Label("Using your Claude account", systemImage: "checkmark.circle.fill")
+                        Label("Using your Claude \(plan.capitalized) subscription", systemImage: "checkmark.circle.fill")
                             .foregroundStyle(.green)
                     }
-                    Text("Tokens are minted by the Anthropic CLI profile on this Mac; nothing to paste or rotate.")
+                    Text("Chapter research runs on the Claude Code login on this Mac, drawing on your subscription. Nothing to paste or rotate.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                } else {
-                    if AntCLI.isInstalled {
-                        Text("The Anthropic CLI is installed. Sign in once in Terminal, then check again:")
-                            .font(.callout)
-                        Text("ant auth login")
-                            .font(.system(.callout, design: .monospaced))
-                            .textSelection(.enabled)
-                    } else {
-                        Text("Install the Anthropic CLI and sign in once; Flyleaf then uses your Claude account with no key to manage:")
-                            .font(.callout)
-                        Text("brew install anthropics/tap/ant\nant auth login")
-                            .font(.system(.callout, design: .monospaced))
-                            .textSelection(.enabled)
+                case .claudeAccount:
+                    LabeledContent("Status") {
+                        Label("Using your Claude account (CLI)", systemImage: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
                     }
+                default:
+                    Text("Sign in to Claude Code on this Mac and Flyleaf uses your Claude subscription automatically. If you use the Claude Code CLI, you're already set; click Check again.")
+                        .font(.callout)
                     Button("Check again") {
                         Task { await state.refreshBuilderAuth() }
                     }
@@ -130,12 +125,13 @@ private struct PackSettings: View {
 
             Section("Or an Anthropic API key") {
                 if hasKey {
+                    let usingKey = state.builderAuth == .apiKey
                     LabeledContent("Status") {
                         Label(
-                            state.builderAuth == .claudeAccount ? "Key saved (Claude account takes priority)" : "Key saved in Keychain",
+                            usingKey ? "Key saved in Keychain" : "Key saved (Claude account takes priority)",
                             systemImage: "checkmark.circle"
                         )
-                        .foregroundStyle(state.builderAuth == .apiKey ? .green : .secondary)
+                        .foregroundStyle(usingKey ? .green : .secondary)
                     }
                     Button("Remove key") {
                         Keychain.delete(account: SecretAccount.anthropicKey)
@@ -218,6 +214,32 @@ private struct AccountSettings: View {
                 Text("Read-only access through Amazon's own sign-in. Flyleaf polls your reading position a few times a minute while you read, nothing more.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+
+            Section("Emailed & sideloaded books") {
+                if state.deviceRegistered && prefs.personalDocSync {
+                    LabeledContent("Status") {
+                        Label("Following personal documents", systemImage: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                    }
+                    Button("Sync a document now") {
+                        Task { await state.refreshActivePersonalDoc(force: true) }
+                    }
+                    Button("Turn off and deregister this Mac", role: .destructive) {
+                        state.disablePersonalDocSync()
+                    }
+                } else {
+                    Text("Books you email to your Kindle (Send-to-Kindle) do not appear in the normal reading API. To follow those too, Flyleaf registers this Mac as a Kindle device, the same step a new Kindle app performs, and reads their position through Whispersync.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button(state.enablingDocSync ? "Registering…" : "Follow my emailed books…") {
+                        Task { await state.enablePersonalDocSync() }
+                    }
+                    .disabled(state.enablingDocSync || state.connection != .connected)
+                    Text("This adds a device named “Flyleaf on Mac” to your Amazon account. You can remove it here or at amazon.com anytime.")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
             }
         }
         .formStyle(.grouped)

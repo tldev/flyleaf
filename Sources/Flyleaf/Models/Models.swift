@@ -7,6 +7,7 @@ struct BookRef: Codable, Equatable, Identifiable, Hashable {
     var authors: [String]
     var coverURL: URL?
     var isManual: Bool
+    var isPersonalDoc: Bool = false
 
     var authorLine: String { authors.joined(separator: ", ") }
 
@@ -29,6 +30,10 @@ struct BookRef: Codable, Equatable, Identifiable, Hashable {
             isManual: true
         )
     }
+
+    // A book whose position Flyleaf follows automatically but whose progress
+    // comes from Whispersync-for-Documents rather than the reader API.
+    var syncsAutomatically: Bool { !isManual || isPersonalDoc }
 }
 
 struct ReadingPosition: Codable, Equatable {

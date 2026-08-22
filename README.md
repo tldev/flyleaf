@@ -9,6 +9,7 @@ A native macOS companion that follows your Kindle reading position and quietly s
 - **Floating glance panel** (optional, off by default, toggle in the menu bar): the always-on-top, non-activating card rotation from the spec, with ambient mode after a few quiet minutes.
 - **Amazon connect**: embedded Amazon sign-in (2FA and passkeys work; the password never touches Flyleaf), then read-only Whispersync position polling through the same endpoints the Kindle web reader uses.
 - **Content pipeline**: two-pass pack builder on the Anthropic API (research pass with web search, then schema-constrained JSON), Wikipedia enrichment for images and coordinates, spoiler windowing per chapter, SQLite pack cache keyed by (ASIN, chapter, pack version).
+- **Emailed & sideloaded books**: books you Send-to-Kindle don't appear in the normal reading API, so Flyleaf (opt-in, Settings → Account) registers this Mac as a Kindle device and follows their Whispersync-for-Documents position automatically, no manual mode. Position is exact; the percentage self-calibrates (one tap on the chapter control makes it precise). See `docs/kindle-endpoints.md`.
 - **Manual Mode**: pick any book by title, or from your Kindle library; identical downstream.
 - Chapter briefings and opt-in notifications, Previously On recaps, Ask (Option-Command-K), Say It pronunciation, Then and Now conversions, First Mention chips, report-a-card, reading stats with projected finish, spoiler-free HTML export of the Cast and Atlas.
 

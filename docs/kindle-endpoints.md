@@ -33,13 +33,29 @@ GET /service/mobile/reader/startReading?asin=<ASIN>&clientVersion=20000100
 
 Gives the syncing device's name ("synced 2m ago from Oasis"), the raw furthest position, and `metadataUrl`: a CDN JSONP document (`loadMetadata({...})`) containing `startPosition`, `endPosition`, `publisher`, `releaseDate`, and for many books a nav `toc` with positions. When the TOC is present, chapter boundaries are exact: `percent = (position - startPosition) / (endPosition - startPosition)`. This is delivery metadata, not book content.
 
-## Personal documents (Send-to-Kindle) are invisible here
+## Personal documents (Send-to-Kindle): the working path
 
-Verified against a real account (2026-08-22): the library search returns only store content (every item `resourceType=EBOOK`, `originType=PURCHASE`). A title search for an emailed book returns nothing, and document-flavored parameters (`libraryType=PDOCS`, `libraryType=DOCS`, `resourceType=PDOC`) are rejected with HTTP 400. The Kindle Cloud Reader simply does not carry personal documents, so cookie-based auth cannot see them or their positions.
+Emailed books do not appear in the Cloud Reader library API (verified 2026-08-22: `libraryType=PDOCS`/`DOCS` and `resourceType=PDOC` all return HTTP 400; a title search finds nothing), and the web reader cannot open them (`startReading` returns `downloadRestrictionReason: ContentUnsupported`). Cookie auth to the CDE sidecar returns HTTP 200 with an empty body. So there is no cookie-only route to a personal document's position.
 
-Consequences for Flyleaf: emailed books run in Manual Mode (identical experience, chapter set by hand). The real fix is full device registration (the `/auth/register` flow real Kindle apps use, yielding ADP tokens for the device-sync endpoints such as `todo-ta-g7g.amazon.com`), which participates in Whispersync for Documents. That is the roadmap path for v0.2, with the caveat that doc position sync also depends on the account's personal document settings.
+Flyleaf follows them anyway, in three steps, all verified end to end against a real account:
 
-The app ships a probe for this surface: `flyleaf://diag?q=<term>` logs what each endpoint variant returns for the signed-in account.
+1. **List them** (cookie auth): the Manage-Your-Content console.
+   - CSRF token from an HTML page under `www.amazon.<tld>/hz/mycd/digital-console/...` (`csrfToken` in the markup).
+   - `POST www.amazon.<tld>/hz/mycd/digital-console/ajax`, form body `activity=GetContentOwnershipData&activityInput={...contentType:"KindlePDoc", contentCategoryReference:"pdocs"...}&csrfToken=...` → JSON items with `asin`, `title`, `authors`.
+
+2. **Register this Mac as a device** (once): the OAuth flow real Kindle/Audible apps use.
+   - Build a PKCE challenge, load `www.amazon.<tld>/ap/signin?openid.oa2.response_type=code&...&openid.oa2.scope=device_auth_access&openid.oa2.client_id=device:<hex(serial#deviceType)>` in a web view. Because the session is already signed in, Amazon redirects to `/ap/maplanding?openid.oa2.authorization_code=...` with no second login (a hidden view; surfaced only if consent is needed).
+   - `POST api.amazon.<tld>/auth/register` with the code, `code_verifier`, and `registration_data` → `response.success.tokens.mac_dms.adp_token` and `device_private_key`.
+
+3. **Read the furthest-read position** (ADP device auth): sign requests as that device and call the CDE.
+   - Signature: `x-adp-token`, `x-adp-alg: SHA256withRSA:1.0`, and `x-adp-signature = base64(RSA-SHA256("<METHOD>\n<path>\n<date>\n<body>\n<adp_token>")):<date>`.
+   - `GET cde-ta-g7g.amazon.com/FionaCDEServiceEngine/sidecar?type=PDOC&key=<asin>` returns JSON: `payload.records[]` with `type: "kindle.lpr"`, `location` (the furthest-read position), and `creationTime` (when, and `getAnnotations?filter=last_read...` names the device). Example: Apple in China → `location 190065`, last read from "Thomas's 3rd Kindle".
+
+What is not exposed: the document's total position count. The delivery manifest (`kindle-digital-delivery.amazon.com/delivery/manifest/...`) is a GET-only CDN that rejects the request, and `syncMetaData`/`getItems` are empty for a fresh device. So Flyleaf estimates the position scale (assume mid-book, then track the observed maximum) and the chapter control calibrates it exactly with one tap (`impliedMax = position / chapterStartFraction`). Percent for personal documents is therefore approximate until it self-calibrates.
+
+Registration adds a device named "Flyleaf on Mac" to the account; it is removable in Settings (deregister) or at amazon.com. Whispersync-for-Documents must be enabled on the account (it is by default) for positions to sync.
+
+Dev probes: `flyleaf://diag?q=<term>` (enumerate + sidecar attempts), `flyleaf://register?q=<term>` (register + read one document's position), `flyleaf://docsync` (enable following). `Tools/kprobe.swift` makes ADP-signed requests from the exported device credentials for fast endpoint testing without rebuilding the app.
 
 ## Fallbacks and politeness
 

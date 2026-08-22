@@ -51,6 +51,16 @@ enum AmazonRegion: String, CaseIterable, Identifiable {
     }
 
     var readerBaseURL: URL { URL(string: "https://read.amazon.\(domainSuffix)")! }
+    var wwwBaseURL: URL { URL(string: "https://www.amazon.\(domainSuffix)")! }
+
+    // CDE (Content Delivery Engine) is one global host; only the auth pool
+    // differs by marketplace.
+    var cdeAuthPool: String? {
+        switch self {
+        case .com, .ca, .br, .au: return "Amazon"
+        default: return nil
+        }
+    }
 }
 
 @MainActor
@@ -80,6 +90,7 @@ final class Prefs {
     var panelVisible: Bool { didSet { d.set(panelVisible, forKey: "panelVisible") } }
     var hotkeyEnabled: Bool { didSet { d.set(hotkeyEnabled, forKey: "hotkeyEnabled") } }
     var currentASIN: String? { didSet { d.set(currentASIN, forKey: "currentASIN") } }
+    var personalDocSync: Bool { didSet { d.set(personalDocSync, forKey: "personalDocSync") } }
     var packModel: String { didSet { d.set(packModel, forKey: "packModel") } }
     var capturedUserAgent: String? { didSet { d.set(capturedUserAgent, forKey: "capturedUserAgent") } }
 
@@ -104,6 +115,7 @@ final class Prefs {
         panelVisible = d.object(forKey: "panelVisible") as? Bool ?? false
         hotkeyEnabled = d.object(forKey: "hotkeyEnabled") as? Bool ?? true
         currentASIN = d.string(forKey: "currentASIN")
+        personalDocSync = d.object(forKey: "personalDocSync") as? Bool ?? false
         packModel = d.string(forKey: "packModel") ?? "claude-opus-5"
         capturedUserAgent = d.string(forKey: "capturedUserAgent")
     }
