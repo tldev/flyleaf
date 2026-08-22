@@ -14,7 +14,7 @@ import CryptoKit
 
 // MARK: Credentials
 
-struct Creds: Codable { let adpToken: String; let devicePrivateKey: String; let deviceType: String; let deviceSerial: String }
+struct Creds: Codable { let adpToken: String; let devicePrivateKey: String; let deviceType: String; let deviceSerial: String; let accessToken: String?; let refreshToken: String? }
 
 func loadCreds() -> Creds {
     let path = ("~/Library/Application Support/Flyleaf/device-creds.json" as NSString).expandingTildeInPath
@@ -75,12 +75,26 @@ func adpHeaders(method: String, path: String, body: String, creds: Creds, key: S
     return ["x-adp-token": creds.adpToken, "x-adp-alg": "SHA256withRSA:1.0", "x-adp-signature": "\(sig64):\(date)"]
 }
 
-func request(method: String, host: String, path: String, body: String?, creds: Creds, key: SecKey) -> (Int, Data) {
+func request(method: String, host: String, path: String, body: String?, creds: Creds, key: SecKey, extraHeaders: [String: String] = [:]) -> (Int, Data) {
     var req = URLRequest(url: URL(string: "https://\(host)\(path)")!)
     req.httpMethod = method
     req.setValue("Flyleaf/0.1", forHTTPHeaderField: "User-Agent")
     if let body { req.setValue("application/json", forHTTPHeaderField: "Content-Type"); req.httpBody = body.data(using: .utf8) }
     for (k, v) in adpHeaders(method: method, path: path, body: body ?? "", creds: creds, key: key) { req.setValue(v, forHTTPHeaderField: k) }
+    for (k, v) in extraHeaders { req.setValue(v, forHTTPHeaderField: k) }
+    let sem = DispatchSemaphore(value: 0); var out = (0, Data())
+    URLSession.shared.dataTask(with: req) { d, r, _ in out = ((r as? HTTPURLResponse)?.statusCode ?? 0, d ?? Data()); sem.signal() }.resume()
+    sem.wait(); return out
+}
+
+// Bearer / plain requests to api.amazon.com (OAuth device token, no ADP).
+func bearerRequest(method: String, url: String, bearer: String?, body: String?, contentType: String?) -> (Int, Data) {
+    var req = URLRequest(url: URL(string: url)!)
+    req.httpMethod = method
+    req.setValue("Kindle/1.0.235280.0.10 CFNetwork/1220.1 Darwin/20.3.0", forHTTPHeaderField: "User-Agent")
+    if let bearer { req.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization") }
+    if let contentType { req.setValue(contentType, forHTTPHeaderField: "Content-Type") }
+    if let body { req.httpBody = body.data(using: .utf8) }
     let sem = DispatchSemaphore(value: 0); var out = (0, Data())
     URLSession.shared.dataTask(with: req) { d, r, _ in out = ((r as? HTTPURLResponse)?.statusCode ?? 0, d ?? Data()); sem.signal() }.resume()
     sem.wait(); return out
@@ -106,6 +120,49 @@ case "position":
 case "raw":
     let (status, body) = request(method: args[1], host: args[2], path: args[3], body: args.count > 4 ? args[4] : nil, creds: creds, key: key)
     show(status, body, truncate: 100_000)
+case "manifest":
+    // kprobe manifest ASIN [pdoc|ebook]
+    let asin = args[1].uppercased()
+    let type = args.count > 2 ? args[2] : "pdoc"
+    let kindleType = type == "ebook" ? "EBOK" : "PDOC"
+    let ts = String(Int(Date().timeIntervalSince1970 * 1000))
+    let corr = "Device:\(creds.deviceType):\(creds.deviceSerial);kindle.\(kindleType):\(asin):\(ts)"
+    let extra = [
+        "X-ADP-AttemptCount": "1",
+        "X-ADP-CorrelationId": corr,
+        "X-ADP-Transport": "WiFi",
+        "X-ADP-Reason": "ArchivedItems",
+        "x-amzn-accept-type": "application/x.amzn.digital.deliverymanifest@1.0",
+        "X-ADP-SW": "1184366692",
+        "User-Agent": "Kindle/1.0.235280.0.10 CFNetwork/1220.1 Darwin/20.3.0",
+    ]
+    let (status, body) = request(method: "GET", host: "kindle-digital-delivery.amazon.com", path: "/delivery/manifest/kindle.\(type)/\(asin)", body: nil, creds: creds, key: key, extraHeaders: extra)
+    show(status, body, truncate: 6000)
+case "download":
+    // Download the (un-DRM'd personal doc) content and inspect its format.
+    let asin = args[1].uppercased()
+    let (s, b) = request(method: "GET", host: "kindle-digital-delivery.amazon.com", path: "/FionaCDEServiceEngine/FSDownloadContent?type=PDOC&key=\(asin)", body: nil, creds: creds, key: key)
+    let out = "/tmp/flyleaf-doc.bin"
+    try? b.write(to: URL(fileURLWithPath: out))
+    print("HTTP \(s), wrote \(b.count) bytes to \(out)")
+    print("magic hex: \(b.prefix(24).map { String(format: "%02x", $0) }.joined(separator: " "))")
+    print("magic ascii: \(String(decoding: b.prefix(24).map { ($0 >= 32 && $0 < 127) ? $0 : 46 }, as: UTF8.self))")
+case "whispersync":
+    // Refresh the device access token, resolve the user id, then dump the
+    // Whispersync v2 reading-position datasets.
+    let refreshBody = "app_name=Kindle%20for%20iOS&app_version=6.38.0.100&source_token=\(creds.refreshToken ?? "")&requested_token_type=access_token&source_token_type=refresh_token"
+    let (ts, tb) = bearerRequest(method: "POST", url: "https://api.amazon.com/auth/token", bearer: nil, body: refreshBody, contentType: "application/x-www-form-urlencoded")
+    guard ts == 200, let tj = try? JSONSerialization.jsonObject(with: tb) as? [String: Any], let access = tj["access_token"] as? String else {
+        print("token refresh failed (\(ts)):"); show(ts, tb); exit(1)
+    }
+    print("refreshed device access token")
+    let (ps, pb) = bearerRequest(method: "GET", url: "https://api.amazon.com/user/profile", bearer: access, body: nil, contentType: nil)
+    let userId = ((try? JSONSerialization.jsonObject(with: pb)) as? [String: Any])?["user_id"] as? String ?? "A1MHXAUUM5569S"
+    print("user_id: \(userId) (profile HTTP \(ps))")
+    let arg = args.count > 1 ? args[1] : "datasets"
+    let path = arg == "datasets" ? "datasets?embed=records.first_page&quiet=true" : arg
+    let (ws, wb) = bearerRequest(method: "GET", url: "https://api.amazon.com/whispersync/v2/data/\(userId)/\(path)", bearer: access, body: nil, contentType: nil)
+    show(ws, wb, truncate: 3_000_000)
 default:
     let method = args.count >= 1 ? args[0] : "GET"
     let host = args.count >= 2 ? args[1] : "cde-ta-g7g.amazon.com"
