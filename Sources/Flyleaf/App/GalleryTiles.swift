@@ -150,12 +150,17 @@ struct PlaceMapTile: View {
         return withCoords.isEmpty ? [place] : withCoords
     }
 
-    // The four corners of the main map's viewport, drawn as a rectangle on the
-    // inset so it shows where the big map sits in the wider region.
-    private var mainViewportCorners: [CLLocationCoordinate2D] {
-        let half = mainSpanDelta / 2
-        let n = center.latitude + half, s = center.latitude - half
-        let e = center.longitude + half, w = center.longitude - half
+    // The four corners of the main map's actual viewport, drawn as a rectangle
+    // on the inset. The main map requests a square span but renders in a wide
+    // landscape frame, so MapKit keeps the latitude span and widens longitude
+    // to fill; the rectangle mirrors that aspect (with the cos-latitude factor
+    // so 1 degree of longitude isn't over-counted this far from the equator).
+    private func mainViewportCorners(tileAspect: CGFloat) -> [CLLocationCoordinate2D] {
+        let halfLat = mainSpanDelta / 2
+        let cosLat = max(0.2, cos(center.latitude * .pi / 180))
+        let halfLon = min(halfLat * Double(tileAspect) / cosLat, insetSpanDelta / 2)
+        let n = center.latitude + halfLat, s = center.latitude - halfLat
+        let e = center.longitude + halfLon, w = center.longitude - halfLon
         return [
             CLLocationCoordinate2D(latitude: n, longitude: w),
             CLLocationCoordinate2D(latitude: n, longitude: e),
@@ -165,45 +170,48 @@ struct PlaceMapTile: View {
     }
 
     var body: some View {
-        ZStack {
-            Map(initialPosition: .region(MKCoordinateRegion(
-                center: center,
-                span: MKCoordinateSpan(latitudeDelta: mainSpanDelta, longitudeDelta: mainSpanDelta)
-            ))) {
-                ForEach(markers) { p in
-                    Annotation(p.name, coordinate: CLLocationCoordinate2D(latitude: p.latitude ?? 0, longitude: p.longitude ?? 0)) {
-                        MarkerDot(label: p.name)
+        GeometryReader { geo in
+            let tileAspect = geo.size.width / max(1, geo.size.height)
+            ZStack {
+                Map(initialPosition: .region(MKCoordinateRegion(
+                    center: center,
+                    span: MKCoordinateSpan(latitudeDelta: mainSpanDelta, longitudeDelta: mainSpanDelta)
+                ))) {
+                    ForEach(markers) { p in
+                        Annotation(p.name, coordinate: CLLocationCoordinate2D(latitude: p.latitude ?? 0, longitude: p.longitude ?? 0)) {
+                            MarkerDot(label: p.name)
+                        }
                     }
                 }
-            }
-            .mapStyle(.standard(elevation: .flat, pointsOfInterest: .excludingAll))
-            .mapControlVisibility(.hidden)
-            .allowsHitTesting(false)
-            .overlay(Gallery.accent.opacity(0.04))
+                .mapStyle(.standard(elevation: .flat, pointsOfInterest: .excludingAll))
+                .mapControlVisibility(.hidden)
+                .allowsHitTesting(false)
+                .overlay(Gallery.accent.opacity(0.04))
 
-            // Inset: where this sits in the wider region.
-            VStack {
-                HStack {
-                    insetMap
+                // Inset: where this sits in the wider region.
+                VStack {
+                    HStack {
+                        insetMap(tileAspect: tileAspect)
+                        Spacer()
+                        regionBadge
+                    }
                     Spacer()
-                    regionBadge
                 }
-                Spacer()
+                .padding(12)
             }
-            .padding(12)
         }
     }
 
     private let insetSpanDelta: CLLocationDegrees = 12
 
-    private var insetMap: some View {
+    private func insetMap(tileAspect: CGFloat) -> some View {
         // A regional view (place sits lower-right with land context around it),
         // zoomed enough that the viewport rectangle reads clearly.
         Map(initialPosition: .region(MKCoordinateRegion(
             center: CLLocationCoordinate2D(latitude: (place.latitude ?? 0) + 3.5, longitude: (place.longitude ?? 0) - 3),
             span: MKCoordinateSpan(latitudeDelta: insetSpanDelta, longitudeDelta: insetSpanDelta)
         ))) {
-            MapPolygon(coordinates: mainViewportCorners)
+            MapPolygon(coordinates: mainViewportCorners(tileAspect: tileAspect))
                 .foregroundStyle(Gallery.accent.opacity(0.14))
                 .stroke(Gallery.accent, lineWidth: 2)
         }
