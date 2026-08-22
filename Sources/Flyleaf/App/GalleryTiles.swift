@@ -194,10 +194,14 @@ struct PlaceMapTile: View {
         }
     }
 
+    private let insetSpanDelta: CLLocationDegrees = 12
+
     private var insetMap: some View {
+        // A regional view (place sits lower-right with land context around it),
+        // zoomed enough that the viewport rectangle reads clearly.
         Map(initialPosition: .region(MKCoordinateRegion(
-            center: CLLocationCoordinate2D(latitude: (place.latitude ?? 0) + 5, longitude: (place.longitude ?? 0) - 4),
-            span: MKCoordinateSpan(latitudeDelta: 30, longitudeDelta: 30)
+            center: CLLocationCoordinate2D(latitude: (place.latitude ?? 0) + 3.5, longitude: (place.longitude ?? 0) - 3),
+            span: MKCoordinateSpan(latitudeDelta: insetSpanDelta, longitudeDelta: insetSpanDelta)
         ))) {
             MapPolygon(coordinates: mainViewportCorners)
                 .foregroundStyle(Gallery.accent.opacity(0.14))

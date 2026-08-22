@@ -42,7 +42,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         log(.app, "Flyleaf launching (\(Bundle.main.bundleIdentifier ?? "no bundle"))")
-        NSApp.setActivationPolicy(.accessory)
+        // Regular app: a Dock icon plus the menu bar item.
+        NSApp.setActivationPolicy(.regular)
 
         URLCache.shared = URLCache(
             memoryCapacity: 40 * 1024 * 1024,
@@ -76,6 +77,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for url in urls {
             URLCommands.handle(url, state: state)
         }
+    }
+
+    // Clicking the Dock icon (re-open) brings back the main window.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag {
+            if Prefs.shared.onboardingComplete {
+                WindowManager.shared.showMain()
+            } else {
+                WindowManager.shared.showOnboarding()
+            }
+        }
+        return true
     }
 
     func applicationWillTerminate(_ notification: Notification) {
