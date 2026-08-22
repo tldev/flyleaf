@@ -40,18 +40,29 @@ final class AppState {
         poller = PositionPoller(state: self)
     }
 
-    var hasBuilderKey: Bool {
-        AnthropicClient.fromKeychain() != nil
+    enum BuilderAuthStatus: Equatable {
+        case none, claudeAccount, apiKey
     }
 
-    private func makeBuilder() -> PackBuilder? {
-        guard let client = AnthropicClient.fromKeychain() else { return nil }
-        return PackBuilder(client: client)
+    var builderAuth: BuilderAuthStatus = .none
+    var builderAvailable: Bool { builderAuth != .none }
+
+    func refreshBuilderAuth() async {
+        let cliWorks = await Task.detached(operation: { AntCLI.mintAccessToken() != nil }).value
+        if cliWorks {
+            builderAuth = .claudeAccount
+        } else if let key = Keychain.get(account: SecretAccount.anthropicKey), !key.isEmpty {
+            builderAuth = .apiKey
+        } else {
+            builderAuth = .none
+        }
+        log(.anthropic, "Builder auth: \(builderAuth)")
     }
 
     // MARK: Lifecycle
 
     func bootstrap(demo: Bool) {
+        Task { await refreshBuilderAuth() }
         if demo {
             loadDemo()
             return
@@ -84,20 +95,28 @@ final class AppState {
         kindle = client
         connection = .connecting
         Task {
-            do {
-                let count = try await client.verifySession()
-                connection = .connected
-                statusMessage = nil
-                Prefs.shared.amazonConnected = true
-                log(.app, "Amazon session verified, \(count) books visible")
-                poller.pollSoon()
-            } catch let error as KindleError where error.isAuthFailure {
-                connection = .needsReauth
-                log(.auth, .warn, "Session verify failed: \(error)")
-            } catch {
-                connection = .needsReauth
-                statusMessage = "\(error)"
-                log(.auth, .error, "Session verify error: \(error)")
+            for attempt in 1...2 {
+                do {
+                    let count = try await client.verifySession()
+                    connection = .connected
+                    statusMessage = nil
+                    Prefs.shared.amazonConnected = true
+                    log(.app, "Amazon session verified, \(count) books visible")
+                    poller.pollSoon()
+                    return
+                } catch let error as KindleError where error.isAuthFailure {
+                    if attempt == 1 {
+                        log(.auth, .warn, "Session verify attempt 1 failed (\(error)), retrying")
+                        try? await Task.sleep(nanoseconds: 2_500_000_000)
+                        continue
+                    }
+                    connection = .needsReauth
+                    log(.auth, .warn, "Session verify failed: \(error)")
+                } catch {
+                    connection = .needsReauth
+                    statusMessage = "\(error)"
+                    log(.auth, .error, "Session verify error: \(error)")
+                }
             }
         }
     }
@@ -125,20 +144,23 @@ final class AppState {
             library = refs
             for ref in refs.prefix(20) { store.saveBook(ref) }
 
-            var adopted = false
             if let first = items.first {
                 let shouldAdopt = currentBook == nil
                     || (Prefs.shared.followMostRecent && first.asin != currentBook?.asin && !(currentBook?.isManual ?? false))
                 if shouldAdopt && first.asin != currentBook?.asin {
                     adopt(book: first.bookRef, percent: first.percentageRead)
-                    adopted = true
                     log(.poller, "Following most recent book: \(first.title)")
                 }
             }
 
-            if !adopted, let book = currentBook,
-               let item = items.first(where: { $0.asin == book.asin }) {
-                apply(percent: item.percentageRead, for: book)
+            if let book = currentBook, !book.isManual {
+                // startReading's lastPageReadData is the authoritative
+                // cross-device Whispersync position; the library listing's
+                // percentageRead can lag it, so it is only the fallback.
+                let refined = await refreshWhispersync(for: book)
+                if !refined, let item = items.first(where: { $0.asin == book.asin }) {
+                    apply(percent: item.percentageRead, for: book)
+                }
             }
         } catch let error as KindleError where error.isAuthFailure {
             connection = .needsReauth
@@ -188,7 +210,6 @@ final class AppState {
         } else {
             recomputeChapter()
         }
-        fetchSyncDetail(for: book)
     }
 
     func switchTo(book: BookRef) {
@@ -198,32 +219,45 @@ final class AppState {
         }
     }
 
-    // Pulls device name, fine position, and (when a book exposes it) the exact
-    // nav TOC from delivery metadata. One call per book adoption, not per poll.
-    private func fetchSyncDetail(for book: BookRef) {
-        guard !book.isManual, let kindle else { return }
-        Task {
-            do {
-                let info = try await kindle.startReading(asin: book.asin)
-                if let lastPage = info.lastPageReadData {
-                    position?.deviceName = lastPage.deviceName
-                    position?.kindlePosition = lastPage.position
-                }
-                if let metaURL = info.metadataUrl {
-                    let meta = try await kindle.metadata(from: metaURL)
-                    if let exactTOC = meta.bookTOC() {
+    private var metadataCache = [String: BookMetadata]()
+
+    // Reads the authoritative Whispersync position (startReading's
+    // lastPageReadData) and, first time per book, delivery metadata: exact
+    // position bounds plus the nav TOC when the book exposes one. Returns
+    // true when a position percent was applied.
+    private func refreshWhispersync(for book: BookRef) async -> Bool {
+        guard !book.isManual, let kindle else { return false }
+        do {
+            let info = try await kindle.startReading(asin: book.asin)
+            if metadataCache[book.asin] == nil, let metaURL = info.metadataUrl {
+                if let meta = try? await kindle.metadata(from: metaURL) {
+                    metadataCache[book.asin] = meta
+                    if let exactTOC = meta.bookTOC(), toc?.source != "kindle-metadata" {
                         toc = exactTOC
                         store.saveTOC(exactTOC, asin: book.asin)
                         log(.kindle, "Using exact TOC from book metadata (\(exactTOC.chapters.count) chapters)")
                         recomputeChapter()
                     }
-                    if let pos = info.lastPageReadData?.position, let refined = meta.percent(forPosition: pos) {
-                        apply(percent: refined, for: book)
-                    }
                 }
-            } catch {
-                log(.kindle, .warn, "Sync detail fetch failed for \(book.title): \(error)")
             }
+            guard let lastPage = info.lastPageReadData else { return false }
+            if let device = lastPage.deviceName, !device.isEmpty {
+                position?.deviceName = device
+            }
+            position?.kindlePosition = lastPage.position
+            if let pos = lastPage.position,
+               let percent = metadataCache[book.asin]?.percent(forPosition: pos) {
+                let device = lastPage.deviceName
+                apply(percent: percent, for: book)
+                if let device, !device.isEmpty {
+                    position?.deviceName = device
+                }
+                return true
+            }
+            return false
+        } catch {
+            log(.kindle, .debug, "Whispersync detail failed for \(book.title): \(error)")
+            return false
         }
     }
 
@@ -235,7 +269,7 @@ final class AppState {
             recomputeChapter()
             return
         }
-        guard let builder = makeBuilder() else {
+        guard builderAvailable else {
             let generic = Self.genericTOC()
             toc = generic
             packStatus = .needsKey
@@ -245,6 +279,11 @@ final class AppState {
         packStatus = .building("Finding the chapters")
         Task {
             do {
+                guard let client = await AnthropicClient.resolve() else {
+                    packStatus = .needsKey
+                    return
+                }
+                let builder = PackBuilder(client: client)
                 let built = try await builder.buildTOC(book: book)
                 store.saveTOC(built, asin: book.asin)
                 if currentBook?.asin == book.asin {
@@ -276,14 +315,17 @@ final class AppState {
         return BookTOC(chapters: chapters, source: "generic")
     }
 
-    // Called when the user saves an API key after the fact: rebuild whatever
-    // was skipped for lack of one.
+    // Called when builder auth changes (key saved, CLI login): rebuild
+    // whatever was skipped for lack of it.
     func builderKeyAdded() {
-        guard let book = currentBook else { return }
-        if store.loadTOC(asin: book.asin) == nil {
-            ensureTOC(for: book)
-        } else if let chapter = currentChapter {
-            ensurePack(chapter: chapter, display: true)
+        Task {
+            await refreshBuilderAuth()
+            guard builderAvailable, let book = currentBook else { return }
+            if store.loadTOC(asin: book.asin) == nil {
+                ensureTOC(for: book)
+            } else if let chapter = currentChapter {
+                ensurePack(chapter: chapter, display: true)
+            }
         }
     }
 
@@ -348,7 +390,7 @@ final class AppState {
             }
             return
         }
-        guard let builder = makeBuilder() else {
+        guard builderAvailable else {
             if display { packStatus = .needsKey }
             return
         }
@@ -367,6 +409,11 @@ final class AppState {
         Task {
             defer { buildingKeys.remove(key) }
             do {
+                guard let client = await AnthropicClient.resolve() else {
+                    if display && currentChapter == chapter { packStatus = .needsKey }
+                    return
+                }
+                let builder = PackBuilder(client: client)
                 let raw = try await builder.buildPack(
                     book: book,
                     chapter: chapter,
@@ -392,7 +439,7 @@ final class AppState {
             } catch {
                 log(.packs, .error, "Pack build failed for ch\(chapter): \(error)")
                 if display && currentChapter == chapter {
-                    if case AnthropicError.noKey = error {
+                    if case AnthropicError.noAuth = error {
                         packStatus = .needsKey
                     } else {
                         packStatus = .failed("\(error)")

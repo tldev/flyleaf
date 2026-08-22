@@ -64,7 +64,10 @@ final class KindleClient {
             return try Self.handle(status: status, body: body, url: url)
         }
 
-        requestHeaders["Cookie"] = await AmazonCookies.header(for: url, region: region)
+        let cookieHeader = await AmazonCookies.header(for: url, region: region)
+        requestHeaders["Cookie"] = cookieHeader
+        let cookieNames = cookieHeader.split(separator: ";").compactMap { $0.split(separator: "=").first?.trimmingCharacters(in: .whitespaces) }
+        log(.kindle, .debug, "GET \(url.path) with \(cookieNames.count) cookies [\(cookieNames.sorted().joined(separator: ","))]")
         var request = URLRequest(url: url)
         for (k, v) in requestHeaders { request.setValue(v, forHTTPHeaderField: k) }
 
@@ -117,8 +120,10 @@ final class KindleClient {
             if looksLikeChallenge {
                 throw KindleError.botWall(status: status)
             }
+            log(.kindle, .warn, "HTTP \(status) from \(url.path): \(snippet.prefix(200))")
             throw KindleError.http(status: status)
         default:
+            log(.kindle, .warn, "HTTP \(status) from \(url.path): \(snippet.prefix(200))")
             throw KindleError.http(status: status)
         }
     }
@@ -231,6 +236,77 @@ final class KindleClient {
         try await registerDevice()
         let items = try await library()
         return items.count
+    }
+
+    // Developer diagnostics (flyleaf://diag?q=term): probes library endpoint
+    // variants to see what the account can actually enumerate, most usefully
+    // whether Send-to-Kindle personal documents appear anywhere, and whether
+    // Whispersync position exists for a matched item. Results go to the log.
+    func runLibraryDiagnostics(searchTerm: String) async {
+        log(.kindle, "DIAG start, searching for '\(searchTerm)'")
+        if adpSessionToken == nil {
+            do { try await registerDevice() } catch {
+                log(.kindle, "DIAG registerDevice failed: \(error)")
+                return
+            }
+        }
+
+        let variants: [(label: String, params: [(String, String)])] = [
+            ("BOOKS recency", [("query", ""), ("libraryType", "BOOKS"), ("sortType", "recency"), ("querySize", "50")]),
+            ("BOOKS title search", [("query", searchTerm), ("libraryType", "BOOKS"), ("sortType", "recency"), ("querySize", "50")]),
+            ("no libraryType", [("query", ""), ("sortType", "recency"), ("querySize", "50")]),
+            ("libraryType PDOCS", [("query", ""), ("libraryType", "PDOCS"), ("sortType", "recency"), ("querySize", "50")]),
+            ("libraryType DOCS", [("query", ""), ("libraryType", "DOCS"), ("sortType", "recency"), ("querySize", "50")]),
+            ("resourceType PDOC", [("query", ""), ("libraryType", "BOOKS"), ("resourceType", "PDOC"), ("sortType", "recency"), ("querySize", "50")]),
+            ("resourceType EBOOK+PDOC", [("query", ""), ("libraryType", "BOOKS"), ("resourceType", "EBOOK,PDOC"), ("sortType", "recency"), ("querySize", "50")]),
+        ]
+
+        var matchedASINs = [String: String]()
+
+        for variant in variants {
+            var comps = URLComponents(url: baseURL.appendingPathComponent("kindle-library/search"), resolvingAgainstBaseURL: false)!
+            comps.queryItems = variant.params.map { URLQueryItem(name: $0.0, value: $0.1) }
+            do {
+                let data = try await get(comps.url!)
+                guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    let snippet = String(data: data.prefix(160), encoding: .utf8) ?? "?"
+                    log(.kindle, "DIAG [\(variant.label)]: non-JSON response: \(snippet)")
+                    continue
+                }
+                let items = obj["itemsList"] as? [[String: Any]] ?? []
+                let extraKeys = Set(obj.keys).subtracting(["itemsList", "paginationToken", "sortType"])
+                log(.kindle, "DIAG [\(variant.label)]: \(items.count) items\(extraKeys.isEmpty ? "" : ", extra keys: \(extraKeys.sorted())")")
+                for item in items.prefix(6) {
+                    let title = item["title"] as? String ?? "?"
+                    let rtype = item["resourceType"] as? String ?? "?"
+                    let origin = item["originType"] as? String ?? "?"
+                    let percent = (item["percentageRead"] as? NSNumber)?.stringValue ?? "-"
+                    log(.kindle, "DIAG    \(title) | type=\(rtype) origin=\(origin) read=\(percent)%")
+                }
+                for item in items {
+                    guard let title = item["title"] as? String,
+                          title.localizedCaseInsensitiveContains(searchTerm),
+                          let asin = item["asin"] as? String else { continue }
+                    matchedASINs[asin] = title
+                    log(.kindle, "DIAG    MATCH in [\(variant.label)]: \(item)")
+                }
+            } catch {
+                log(.kindle, "DIAG [\(variant.label)]: \(error)")
+            }
+            try? await Task.sleep(nanoseconds: 400_000_000)
+        }
+
+        for (asin, title) in matchedASINs {
+            do {
+                let info = try await startReading(asin: asin)
+                let position = info.lastPageReadData?.position.map(String.init) ?? "none"
+                let device = info.lastPageReadData?.deviceName ?? "none"
+                log(.kindle, "DIAG startReading '\(title)': position=\(position) device=\(device) metadataUrl=\(info.metadataUrl != nil)")
+            } catch {
+                log(.kindle, "DIAG startReading '\(title)' failed: \(error)")
+            }
+        }
+        log(.kindle, "DIAG done (\(matchedASINs.count) matches for '\(searchTerm)')")
     }
 }
 

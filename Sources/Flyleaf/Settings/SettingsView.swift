@@ -99,15 +99,48 @@ private struct PackSettings: View {
     var body: some View {
         @Bindable var prefs = Prefs.shared
         Form {
-            Section("Anthropic API key") {
+            Section("Claude account (recommended)") {
+                if state.builderAuth == .claudeAccount {
+                    LabeledContent("Status") {
+                        Label("Using your Claude account", systemImage: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                    }
+                    Text("Tokens are minted by the Anthropic CLI profile on this Mac; nothing to paste or rotate.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    if AntCLI.isInstalled {
+                        Text("The Anthropic CLI is installed. Sign in once in Terminal, then check again:")
+                            .font(.callout)
+                        Text("ant auth login")
+                            .font(.system(.callout, design: .monospaced))
+                            .textSelection(.enabled)
+                    } else {
+                        Text("Install the Anthropic CLI and sign in once; Flyleaf then uses your Claude account with no key to manage:")
+                            .font(.callout)
+                        Text("brew install anthropics/tap/ant\nant auth login")
+                            .font(.system(.callout, design: .monospaced))
+                            .textSelection(.enabled)
+                    }
+                    Button("Check again") {
+                        Task { await state.refreshBuilderAuth() }
+                    }
+                }
+            }
+
+            Section("Or an Anthropic API key") {
                 if hasKey {
                     LabeledContent("Status") {
-                        Label("Key saved in Keychain", systemImage: "checkmark.circle.fill")
-                            .foregroundStyle(.green)
+                        Label(
+                            state.builderAuth == .claudeAccount ? "Key saved (Claude account takes priority)" : "Key saved in Keychain",
+                            systemImage: "checkmark.circle"
+                        )
+                        .foregroundStyle(state.builderAuth == .apiKey ? .green : .secondary)
                     }
                     Button("Remove key") {
                         Keychain.delete(account: SecretAccount.anthropicKey)
                         hasKey = false
+                        Task { await state.refreshBuilderAuth() }
                     }
                 } else {
                     HStack {
@@ -122,9 +155,6 @@ private struct PackSettings: View {
                         }
                         .disabled(keyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
-                    Text("Personal developer build: chapter research runs on your own key. The shipping product bundles inference server-side.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                 }
             }
 
@@ -210,7 +240,7 @@ private struct AdvancedSettings: View {
             Section("Testing") {
                 Button("Load the demo book") {
                     state.loadDemo()
-                    PanelController.shared.show()
+                    WindowManager.shared.showMain()
                 }
                 Button("Run onboarding again") {
                     Prefs.shared.onboardingComplete = false

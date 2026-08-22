@@ -92,6 +92,14 @@ final class PanelController {
             let topLeft = NSPoint(x: panel.frame.minX, y: panel.frame.maxY)
             panel.setContentSize(target)
             panel.setFrameTopLeftPoint(topLeft)
+            if let visible = (panel.screen ?? NSScreen.main)?.visibleFrame {
+                var frame = panel.frame
+                if frame.minY < visible.minY { frame.origin.y = visible.minY }
+                if frame.maxY > visible.maxY { frame.origin.y = visible.maxY - frame.height }
+                if frame.maxX > visible.maxX { frame.origin.x = visible.maxX - frame.width }
+                if frame.minX < visible.minX { frame.origin.x = visible.minX }
+                if frame.origin != panel.frame.origin { panel.setFrameOrigin(frame.origin) }
+            }
             log(.panel, .debug, "Panel resized to \(NSStringFromRect(panel.frame))")
         }
     }

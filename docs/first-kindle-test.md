@@ -5,7 +5,8 @@ Goal: prove the core loop on a real account and device. Time to first card shoul
 Before you start:
 
 - Kindle on Wi-Fi, signed into the same Amazon account you'll connect.
-- Your Anthropic API key handy (Settings, Pack Builder).
+- Pack builder auth ready: either `ant auth login` completed in Terminal (Claude account, preferred) or an Anthropic API key to paste in Settings, Pack Builder.
+- The book you test with must be a store-purchased Kindle book. Emailed (Send-to-Kindle) books never appear in the Cloud Reader API; use Manual Mode for those.
 - Log file open if you want to watch: `tail -f ~/Library/Application\ Support/Flyleaf/logs/flyleaf.log`
 
 ## 1. Onboarding and connect

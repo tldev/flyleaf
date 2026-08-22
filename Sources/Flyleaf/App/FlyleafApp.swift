@@ -94,7 +94,7 @@ enum URLCommands {
         switch url.host {
         case "demo":
             state.loadDemo()
-            PanelController.shared.show()
+            WindowManager.shared.showMain()
         case "sync":
             state.poller.pollSoon()
         case "panel":
@@ -125,10 +125,17 @@ enum URLCommands {
                let chapter = Int(value) {
                 state.setManualChapter(chapter)
             }
+        case "diag":
+            let comps = URLComponents(url: url, resolvingAgainstBaseURL: false)
+            let term = comps?.queryItems?.first(where: { $0.name == "q" })?.value ?? "apple"
+            if let kindle = state.kindle {
+                Task { await kindle.runLibraryDiagnostics(searchTerm: term) }
+            } else {
+                log(.kindle, .warn, "DIAG requested but Amazon is not connected")
+            }
         case "session":
             // "Start reading session" for Shortcuts and Focus automations.
             Prefs.shared.paused = false
-            PanelController.shared.show()
             state.poller.pollSoon()
         default:
             log(.app, .warn, "Unknown URL command: \(url.absoluteString)")

@@ -26,7 +26,7 @@ Optionally copy `dist/Flyleaf.app` to `/Applications` (needed for reliable launc
 ## Configuration
 
 - **Amazon**: connected during onboarding through Amazon's own sign-in page. Session cookies live in WebKit's store; re-auth is one click from the menu bar when the session expires. Region is selectable in Settings, Account.
-- **Anthropic API key** (this developer build only): pack research runs on your own key. Paste it once in Settings, Pack Builder; it is stored in the Keychain under `com.thomasjohnell.flyleaf`. Without a key, position tracking and Manual Mode still work; cards show a "needs a key" notice. The shipping product would bundle inference server-side per the spec.
+- **Claude account or API key** (this developer build only): pack research prefers your Claude account via the Anthropic CLI. Install and sign in once (`brew install anthropics/tap/ant`, then `ant auth login`); Flyleaf mints short-lived OAuth tokens from that profile with nothing to paste or rotate. Alternatively paste an Anthropic API key in Settings, Pack Builder (stored in the Keychain under `com.thomasjohnell.flyleaf`); the account takes priority when both exist. Without either, position tracking and Manual Mode still work. The shipping product would bundle inference server-side per the spec.
 - Everything else lives in Settings (polling cadence, panel, notifications, prefetch, model).
 
 ## First Kindle test

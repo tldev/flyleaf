@@ -153,7 +153,7 @@ struct MagicMomentView: View {
                 }
             }
 
-            if !state.hasBuilderKey {
+            if !state.builderAvailable {
                 keyEntry
             }
 
@@ -204,9 +204,11 @@ struct MagicMomentView: View {
 
     private var keyEntry: some View {
         VStack(spacing: 8) {
-            Text("Developer build: context packs are researched with your own Anthropic API key.")
+            Text("Developer build: chapter research runs on your Claude account (run \"ant auth login\" in Terminal, then Settings, Pack Builder, Check again) or on an Anthropic API key pasted here.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 420)
             HStack {
                 SecureField("sk-ant-…", text: $keyInput)
                     .textFieldStyle(.roundedBorder)

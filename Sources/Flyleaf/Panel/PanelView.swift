@@ -104,8 +104,8 @@ struct PanelRootView: View {
             case .needsKey:
                 MessageCardView(
                     symbol: "key",
-                    title: "Pack builder needs a key",
-                    message: "This developer build uses your own Anthropic API key to research chapters. Add it once in Settings.",
+                    title: "Pack builder needs an account",
+                    message: "Connect your Claude account (or add an API key) once in Settings and chapters research themselves.",
                     size: prefs.panelSize,
                     highContrast: prefs.highContrast,
                     actionTitle: "Open Settings",

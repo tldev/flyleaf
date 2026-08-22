@@ -33,6 +33,14 @@ GET /service/mobile/reader/startReading?asin=<ASIN>&clientVersion=20000100
 
 Gives the syncing device's name ("synced 2m ago from Oasis"), the raw furthest position, and `metadataUrl`: a CDN JSONP document (`loadMetadata({...})`) containing `startPosition`, `endPosition`, `publisher`, `releaseDate`, and for many books a nav `toc` with positions. When the TOC is present, chapter boundaries are exact: `percent = (position - startPosition) / (endPosition - startPosition)`. This is delivery metadata, not book content.
 
+## Personal documents (Send-to-Kindle) are invisible here
+
+Verified against a real account (2026-08-22): the library search returns only store content (every item `resourceType=EBOOK`, `originType=PURCHASE`). A title search for an emailed book returns nothing, and document-flavored parameters (`libraryType=PDOCS`, `libraryType=DOCS`, `resourceType=PDOC`) are rejected with HTTP 400. The Kindle Cloud Reader simply does not carry personal documents, so cookie-based auth cannot see them or their positions.
+
+Consequences for Flyleaf: emailed books run in Manual Mode (identical experience, chapter set by hand). The real fix is full device registration (the `/auth/register` flow real Kindle apps use, yielding ADP tokens for the device-sync endpoints such as `todo-ta-g7g.amazon.com`), which participates in Whispersync for Documents. That is the roadmap path for v0.2, with the caveat that doc position sync also depends on the account's personal document settings.
+
+The app ships a probe for this surface: `flyleaf://diag?q=<term>` logs what each endpoint variant returns for the signed-in account.
+
 ## Fallbacks and politeness
 
 - Requests go out via URLSession with Safari's user agent (captured from the login webview for coherence). Amazon has TLS-fingerprinted plain HTTP clients in the past (Node clients need a proxy for this reason); Apple's network stack presents a Safari-family fingerprint, and if a bot challenge is ever detected anyway, the client switches to a hidden WKWebView issuing same-origin `fetch()` calls, which is indistinguishable from the web reader.

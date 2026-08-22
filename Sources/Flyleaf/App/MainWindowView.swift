@@ -99,7 +99,7 @@ struct DashboardTab: View {
         case .needsKey:
             HStack(spacing: 10) {
                 Image(systemName: "key").foregroundStyle(.orange)
-                Text("This developer build researches chapters with your own Anthropic API key. Add it once in Settings.")
+                Text("Chapter research needs your Claude account (or an API key). Set it up once in Settings, Pack Builder.")
                     .font(.callout)
                 Spacer()
                 Button("Open Settings") { WindowManager.shared.showSettings() }

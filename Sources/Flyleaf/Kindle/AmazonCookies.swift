@@ -8,13 +8,30 @@ import WebKit
 @MainActor
 enum AmazonCookies {
     static func all(region: AmazonRegion) async -> [HTTPCookie] {
-        let store = WKWebsiteDataStore.default().httpCookieStore
-        let cookies = await store.allCookies()
         let suffix = "amazon.\(region.domainSuffix)"
-        return cookies.filter { cookie in
+        func matches(_ cookie: HTTPCookie) -> Bool {
             let domain = cookie.domain.hasPrefix(".") ? String(cookie.domain.dropFirst()) : cookie.domain
             return domain == suffix || domain.hasSuffix(".\(suffix)") || domain == "read.\(suffix)"
         }
+
+        // Two jars, one truth. WKHTTPCookieStore only answers once a webview
+        // has attached WebKit's network process, so on a fresh launch with no
+        // login window it reports empty. The Foundation jar is the same
+        // persistent store (WebKit bridges into it for non-sandboxed apps)
+        // and reads fine without any webview, so merge both, WebKit winning.
+        for attempt in 0..<2 {
+            var merged = [String: HTTPCookie]()
+            for cookie in HTTPCookieStorage.shared.cookies ?? [] where matches(cookie) {
+                merged["\(cookie.domain)|\(cookie.name)|\(cookie.path)"] = cookie
+            }
+            let store = WKWebsiteDataStore.default().httpCookieStore
+            for cookie in await store.allCookies() where matches(cookie) {
+                merged["\(cookie.domain)|\(cookie.name)|\(cookie.path)"] = cookie
+            }
+            if !merged.isEmpty { return Array(merged.values) }
+            if attempt == 0 { try? await Task.sleep(nanoseconds: 1_000_000_000) }
+        }
+        return []
     }
 
     static func header(for url: URL, region: AmazonRegion) async -> String {

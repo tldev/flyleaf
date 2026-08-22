@@ -22,7 +22,7 @@ struct ManualBookView: View {
                     Button {
                         state.switchTo(book: book)
                         WindowManager.shared.close(id: "manual")
-                        PanelController.shared.show()
+                        WindowManager.shared.showMain()
                     } label: {
                         HStack(spacing: 10) {
                             AsyncImage(url: book.coverURL) { phase in
@@ -69,7 +69,7 @@ struct ManualBookView: View {
                         asin: asin.isEmpty ? nil : asin
                     )
                     WindowManager.shared.close(id: "manual")
-                    PanelController.shared.show()
+                    WindowManager.shared.showMain()
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(title.trimmingCharacters(in: .whitespaces).isEmpty)

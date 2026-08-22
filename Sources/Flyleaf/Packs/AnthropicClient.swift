@@ -1,7 +1,7 @@
 import Foundation
 
 enum AnthropicError: Error, CustomStringConvertible {
-    case noKey
+    case noAuth
     case http(status: Int, message: String)
     case refusal(String)
     case truncated
@@ -11,7 +11,7 @@ enum AnthropicError: Error, CustomStringConvertible {
 
     var description: String {
         switch self {
-        case .noKey: return "No Anthropic API key configured"
+        case .noAuth: return "No Claude account or API key configured"
         case .http(let s, let m): return "Claude API error \(s): \(m)"
         case .refusal(let m): return "The model declined this request: \(m)"
         case .truncated: return "Response hit the token limit"
@@ -20,6 +20,11 @@ enum AnthropicError: Error, CustomStringConvertible {
         case .transport(let m): return "Network error: \(m)"
         }
     }
+}
+
+enum AnthropicAuth {
+    case apiKey(String)
+    case oauth(String)
 }
 
 struct AnthropicResult {
@@ -34,14 +39,16 @@ struct AnthropicResult {
 // Raw Messages API client. Swift has no official SDK, so this speaks the wire
 // format directly: web_search_20260209 for retrieval, output_config.format
 // (json_schema) for structured packs, server-side refusal fallbacks enabled.
+// Auth is either the user's Claude account (OAuth bearer token minted by the
+// Anthropic CLI, oauth-2025-04-20 beta) or a plain API key.
 final class AnthropicClient: @unchecked Sendable {
-    private let apiKey: String
+    private var auth: AnthropicAuth
     private let model: String
     private let session: URLSession
     private let endpoint = URL(string: "https://api.anthropic.com/v1/messages")!
 
-    init(apiKey: String, model: String) {
-        self.apiKey = apiKey
+    init(auth: AnthropicAuth, model: String) {
+        self.auth = auth
         self.model = model
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 600
@@ -49,13 +56,17 @@ final class AnthropicClient: @unchecked Sendable {
         session = URLSession(configuration: config)
     }
 
-    static func fromKeychain() -> AnthropicClient? {
-        guard let key = Keychain.get(account: SecretAccount.anthropicKey), !key.isEmpty else { return nil }
-        var model = "claude-opus-5"
-        if Thread.isMainThread {
-            model = MainActor.assumeIsolated { Prefs.shared.packModel }
+    // Claude account (CLI profile) wins over a pasted key when both exist.
+    @MainActor
+    static func resolve() async -> AnthropicClient? {
+        let model = Prefs.shared.packModel
+        if let token = await Task.detached(operation: { AntCLI.mintAccessToken() }).value {
+            return AnthropicClient(auth: .oauth(token), model: model)
         }
-        return AnthropicClient(apiKey: key, model: model)
+        if let key = Keychain.get(account: SecretAccount.anthropicKey), !key.isEmpty {
+            return AnthropicClient(auth: .apiKey(key), model: model)
+        }
+        return nil
     }
 
     func complete(
@@ -112,10 +123,21 @@ final class AnthropicClient: @unchecked Sendable {
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+
+        var betas = [String]()
+        switch auth {
+        case .apiKey(let key):
+            request.setValue(key, forHTTPHeaderField: "x-api-key")
+        case .oauth(let token):
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            betas.append("oauth-2025-04-20")
+        }
         if useFallbacks {
-            request.setValue("server-side-fallback-2026-07-01", forHTTPHeaderField: "anthropic-beta")
+            betas.append("server-side-fallback-2026-07-01")
+        }
+        if !betas.isEmpty {
+            request.setValue(betas.joined(separator: ","), forHTTPHeaderField: "anthropic-beta")
         }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
@@ -136,6 +158,17 @@ final class AnthropicClient: @unchecked Sendable {
         if status != 200 {
             let message = ((json["error"] as? [String: Any])?["message"] as? String) ?? "unknown"
             log(.anthropic, .warn, "HTTP \(status): \(message)")
+            if status == 401, case .oauth = auth, retriesLeft > 0 {
+                // Token expired mid-flight; the CLI refreshes on mint.
+                if let fresh = await Task.detached(operation: { AntCLI.mintAccessToken() }).value {
+                    auth = .oauth(fresh)
+                    return try await send(
+                        system: system, user: user, webSearch: webSearch, maxSearches: maxSearches,
+                        outputSchema: outputSchema, maxTokens: maxTokens,
+                        useFallbacks: useFallbacks, retriesLeft: retriesLeft - 1
+                    )
+                }
+            }
             if status == 400 && useFallbacks && message.lowercased().contains("fallback") {
                 return try await send(
                     system: system, user: user, webSearch: webSearch, maxSearches: maxSearches,

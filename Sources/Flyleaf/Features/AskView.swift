@@ -39,8 +39,8 @@ struct AskView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
-                    if !state.hasBuilderKey {
-                        Label("Add your Anthropic API key in Settings to use Ask.", systemImage: "key")
+                    if !state.builderAvailable {
+                        Label("Connect your Claude account (or add an API key) in Settings to use Ask.", systemImage: "key")
                             .font(.callout)
                             .foregroundStyle(.secondary)
                         Button("Open Settings") { WindowManager.shared.showSettings() }
@@ -97,25 +97,28 @@ struct AskView: View {
 
     private func submit() {
         let q = question.trimmingCharacters(in: .whitespaces)
-        guard !q.isEmpty, !busy else { return }
-        guard let client = AnthropicClient.fromKeychain() else { return }
+        guard !q.isEmpty, !busy, state.builderAvailable else { return }
         busy = true
         answer = nil
         sources = []
         errorText = nil
-        let builder = PackBuilder(client: client)
         let book = state.currentBook
         let chapter = state.currentChapter
         let web = useWeb
         Task {
+            defer { busy = false }
+            guard let client = await AnthropicClient.resolve() else {
+                errorText = AnthropicError.noAuth.description
+                return
+            }
             do {
+                let builder = PackBuilder(client: client)
                 let result = try await builder.ask(question: q, book: book, chapter: chapter, useWeb: web)
                 answer = result.answer
                 sources = result.sources
             } catch {
                 errorText = "\(error)"
             }
-            busy = false
         }
     }
 }
@@ -140,8 +143,8 @@ struct RecapView: View {
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
-                    if !state.hasBuilderKey {
-                        Label("Add your Anthropic API key in Settings for recaps.", systemImage: "key")
+                    if !state.builderAvailable {
+                        Label("Connect your Claude account (or add an API key) in Settings for recaps.", systemImage: "key")
                             .foregroundStyle(.secondary)
                     } else if busy {
                         HStack(spacing: 8) {
@@ -167,7 +170,7 @@ struct RecapView: View {
             HStack {
                 Spacer()
                 Button("Refresh recap", action: generate)
-                    .disabled(busy || !state.hasBuilderKey || state.currentBook == nil)
+                    .disabled(busy || !state.builderAvailable || state.currentBook == nil)
             }
         }
         .padding(18)
@@ -179,21 +182,25 @@ struct RecapView: View {
 
     private func generate() {
         guard let book = state.currentBook, let chapter = state.currentChapter,
-              let client = AnthropicClient.fromKeychain(), !busy else { return }
+              state.builderAvailable, !busy else { return }
         busy = true
         errorText = nil
         let briefings = state.accumulatedPacks().compactMap { pack -> (chapter: Int, text: String)? in
             guard let briefing = pack.briefing else { return nil }
             return (pack.chapter, briefing)
         }
-        let builder = PackBuilder(client: client)
         Task {
+            defer { busy = false }
+            guard let client = await AnthropicClient.resolve() else {
+                errorText = AnthropicError.noAuth.description
+                return
+            }
             do {
+                let builder = PackBuilder(client: client)
                 recap = try await builder.recap(book: book, briefings: briefings, through: chapter)
             } catch {
                 errorText = "\(error)"
             }
-            busy = false
         }
     }
 }
